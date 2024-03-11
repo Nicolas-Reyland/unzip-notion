@@ -2,17 +2,27 @@
 import argparse
 import re
 import os
-import shutil
+import tempfile
+import zipfile
 
-HASH_SUFFIX_PATTERN = re.compile(b'(.*)( [0-9a-z]{32})(\\.md)?$')
+FILE_HASH_SUFFIX_PATTERN = re.compile(b'(.*)( [0-9a-z]{32})(\\.md)?$')
+MARKDOWN_HASH_SUFFIX_PATTERN = re.compile(b'%20[0-9a-z]{32}')
 
 
 def fix_name(name: bytes) -> bytes:
-    return re.sub(HASH_SUFFIX_PATTERN, b'\\1\\3', name.replace(b'e\xa6\xfc', b'\xc3\xa9'))
+    return re.sub(FILE_HASH_SUFFIX_PATTERN, b'\\1\\3', name.replace(b'e\xa6\xfc', b'\xc3\xa9'))
+
+
+def fix_content(content: bytes) -> bytes:
+    return re.sub(MARKDOWN_HASH_SUFFIX_PATTERN, b'', content)
 
 
 def copy_file(src: bytes, dst: bytes) -> None:
-    shutil.copy(src, dst)
+    with open(src, 'rb') as infile:
+        content = infile.read()
+        with open(dst, 'wb') as outfile:
+            fixed_content = fix_content(content)
+            outfile.write(fixed_content)
 
 
 def beautify(input_dir: bytes, output_dir: bytes, depth: int = 0) -> None:
@@ -39,20 +49,31 @@ def beautify(input_dir: bytes, output_dir: bytes, depth: int = 0) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="unzip notion exports")
-    parser.add_argument("-s", "--source", action="store_true", help="Input is a directory")
+    parser.add_argument("-s", "--source", action="store_true", help="Input is the unzipped directory")
+    parser.add_argument("-f", "--force", action="store_true", help="Overwrite existing files in the output directory")
     parser.add_argument("input")
     parser.add_argument("output")
 
     args = parser.parse_args()
-    if not args.source:
-        raise NotImplementedError("Option --source is not implemented")
-    if not os.path.isdir(args.input):
-        raise OSError("Input is not a directory")
-    if os.path.isdir(args.output):
-        ...
-        # raise OSError("Output directory exists")
+    tmp_folder: tempfile.TemporaryDirectory[str] | None = None
+    input_dir: bytes | None = None
+    if args.source:
+        if not os.path.isdir(args.input):
+            raise OSError("Input is not a directory")
+        input_dir = bytes(args.input, 'utf-8')
+    else:
+        if not os.path.isfile(args.input):
+            raise OSError("Input is not a file")
+        tmp_folder = tempfile.TemporaryDirectory(prefix='notion-unzip-')
+        with zipfile.ZipFile(args.input, 'r') as zip_ref:
+            zip_ref.extractall(tmp_folder.name)
+        input_dir = bytes(tmp_folder.name, 'utf-8')
+    if os.path.isdir(args.output) and not args.force:
+        raise OSError("Output directory exists (consider using -f/--force)")
 
-    beautify(bytes(args.input, 'utf-8'), bytes(args.output, 'utf-8'))
+    beautify(input_dir, bytes(args.output, 'utf-8'))
+    if tmp_folder:
+        tmp_folder.cleanup()
 
 
 if __name__ == "__main__":
