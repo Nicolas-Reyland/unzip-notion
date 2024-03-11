@@ -17,7 +17,10 @@ def fix_content(content: bytes) -> bytes:
     return re.sub(MARKDOWN_HASH_SUFFIX_PATTERN, b'', content)
 
 
-def copy_file(src: bytes, dst: bytes) -> None:
+def copy_file(src: bytes, dst: bytes, force: bool) -> None:
+    if os.path.exists(dst) and not force:
+        raise RuntimeError(f'File "{dst}" already exists. Use --force to overwrite')
+
     with open(src, 'rb') as infile:
         content = infile.read()
         with open(dst, 'wb') as outfile:
@@ -25,11 +28,14 @@ def copy_file(src: bytes, dst: bytes) -> None:
             outfile.write(fixed_content)
 
 
-def beautify(input_dir: bytes, output_dir: bytes, depth: int = 0) -> None:
-    verb = lambda *a, **k: print(" " * depth, *a, **k)
+def beautify(input_dir: bytes, output_dir: bytes, force: bool = False, depth: int = 0) -> None:
+    def verb(*a, **k):
+        print(" " * depth, *a, **k)
 
     if not os.path.isdir(output_dir):
         os.mkdir(output_dir)
+    elif not force:
+        raise RuntimeError(f'Directory "{output_dir}" already exists. Use --force to overwrite')
 
     verb(f"input: {input_dir}, output: {output_dir}")
     for name in os.listdir(input_dir):
@@ -39,10 +45,10 @@ def beautify(input_dir: bytes, output_dir: bytes, depth: int = 0) -> None:
         path = os.path.join(input_dir, name)
         if os.path.isdir(path):
             verb(f"{os.path.basename(path)}: directory")
-            beautify(path, output_name, depth + 1)
+            beautify(path, output_name, force, depth + 1)
         elif os.path.isfile(path):
             verb(f"{os.path.basename(path)}: file")
-            copy_file(path, output_name)
+            copy_file(path, output_name, force)
         else:
             print(f"{path}: unknown type")
 
@@ -55,8 +61,9 @@ def main():
     parser.add_argument("output")
 
     args = parser.parse_args()
+
+    input_dir: bytes
     tmp_folder: tempfile.TemporaryDirectory[str] | None = None
-    input_dir: bytes | None = None
     if args.source:
         if not os.path.isdir(args.input):
             raise OSError("Input is not a directory")
@@ -69,9 +76,9 @@ def main():
             zip_ref.extractall(tmp_folder.name)
         input_dir = bytes(tmp_folder.name, 'utf-8')
     if os.path.isdir(args.output) and not args.force:
-        raise OSError("Output directory exists (consider using -f/--force)")
+        raise OSError("Output directory exists. Use --force to overwrite")
 
-    beautify(input_dir, bytes(args.output, 'utf-8'))
+    beautify(input_dir, bytes(args.output, 'utf-8'), args.force)
     if tmp_folder:
         tmp_folder.cleanup()
 
