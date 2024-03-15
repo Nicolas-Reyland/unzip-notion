@@ -39,7 +39,8 @@ def repair_url_part(url_part: bytes) -> bytes:
 
 def repair_link(
         link_match: re.Match[bytes],
-        invalid_link_prefixes: list[bytes] | None = None,
+        old_link_prefix: bytes,
+        parent_link_prefixes: list[bytes] | None = None,
         url_prefix: list[bytes] | None = None,
         md_link: bool = True
 ) -> bytes:
@@ -47,13 +48,14 @@ def repair_link(
     Repair a Markdown or Image link.
 
     :param link_match: regex match object for a Markdown or Image link
-    :param invalid_link_prefixes: prefixes that are not valid
+    :param old_link_prefix: prefix that must be removed
+    :param parent_link_prefixes: prefixes that are not valid
     :param url_prefix: a prefix to add the resulting url
     :param md_link: the match matches a Markdown link (not an Image link)
     :return: the link with a repaired url part
     """
-    if not invalid_link_prefixes:
-        invalid_link_prefixes = []
+    if not parent_link_prefixes:
+        parent_link_prefixes = []
     if not url_prefix:
         url_prefix = []
 
@@ -69,10 +71,13 @@ def repair_link(
     # Rebuild new url
     new_url_parts = list(map(repair_url_part, url_prefix + url_parts))
     if new_url_parts:
-        if new_url_parts[0] in invalid_link_prefixes:
+        if new_url_parts[0] == old_link_prefix:
             new_url_parts.pop(0)
+        elif new_url_parts[0] in parent_link_prefixes:
+            new_url_parts.insert(0, b'..')
         if md_link:
             new_url_parts[-1] = new_url_parts[-1].removesuffix(b'.md')
+
     new_url = b'/'.join(new_url_parts)
     logger.debug(f'Fixing link: {new_url} (old: {url})')
     return b'[' + name + b'](' + new_url + b')'
@@ -89,22 +94,22 @@ def repair_content(content: bytes, src: bytes, _: bytes, resource_dir_names: lis
     else:
         title = file_basename
 
-    link_prefix = bytes(urllib.parse.quote_from_bytes(file_basename), 'utf-8')
+    old_link_prefix = repair_url_part(bytes(urllib.parse.quote_from_bytes(file_basename), 'utf-8'))
     # repair Markdown links
     md_match_offset = 0
     for match in MARKDOWN_MD_LINK_PATTERN.finditer(content):
-        repaired_link = repair_link(match, resource_dir_names)
+        repaired_link = repair_link(match, old_link_prefix, resource_dir_names)
         content = content[:match.start() + md_match_offset] + repaired_link + content[match.end() + md_match_offset:]
         md_match_offset += len(repaired_link) - match.end() + match.start()
 
     # repair Image links
     img_match_offset = 0
     for match in MARKDOWN_IMG_LINK_PATTERN.finditer(content):
-        repaired_link = repair_link(match, resource_dir_names, md_link=False)
+        repaired_link = repair_link(match, old_link_prefix, resource_dir_names, md_link=False)
         content = content[:match.start() + img_match_offset] + repaired_link + content[match.end() + img_match_offset:]
         img_match_offset += len(repaired_link) - match.end() + match.start()
 
-    slug = urllib.parse.unquote_to_bytes(repair_url_part(link_prefix).removesuffix(b'.md'))
+    slug = urllib.parse.unquote_to_bytes(repair_url_part(old_link_prefix).removesuffix(b'.md'))
 
     return b'''---
 title: ''' + title + b'''
@@ -146,15 +151,20 @@ def beautify(input_dir: bytes, markdown_dir: bytes, resources_dir: bytes, force:
     resource_dir_names: list[bytes] = []
     # process directories first, then files
     for name in sorted(os.listdir(input_dir), key=lambda name_: 0 if os.path.isdir(name_) else 1):
-        # markdown directory
-        repaired_name = repair_name(name).removesuffix(b'.md')
-        repaired_name = repair_url_part(repaired_name)
-        markdown_repaired_dir = os.path.join(markdown_dir, repaired_name)
-        # resource directory
-        resources_repaired_dir = os.path.join(resources_dir, repaired_name)
-        resource_dir_names.append(repaired_name)
+        # first directory should not create a subdirectory
+        if depth != 0:
+            # markdown directory
+            repaired_name = repair_name(name).removesuffix(b'.md')
+            repaired_name = repair_url_part(repaired_name)
+            markdown_repaired_dir = os.path.join(markdown_dir, repaired_name)
+            # resource directory
+            resources_repaired_dir = os.path.join(resources_dir, repaired_name)
+            resource_dir_names.append(repaired_name)
 
-        verb(f"looking at {name} (repaired: {repaired_name})")
+            verb(f"looking at {name} (repaired: {repaired_name})")
+        else:
+            markdown_repaired_dir = markdown_dir
+            resources_repaired_dir = resources_dir
         path = os.path.join(input_dir, name)
 
         if os.path.isdir(path):
@@ -200,11 +210,6 @@ def main():
     beautify(input_dir, os.path.join(output_dir, b'content'), os.path.join(output_dir, b'static'), args.force)
     if tmp_folder:
         tmp_folder.cleanup()
-
-    os.chdir(output_dir.decode('utf-8'))
-    os.system(
-        "rm -rf 'content/dm-01' content/_index.md static/dm-01 && mv content/ars/* content/ && mv "
-        "static/ars/* static/ && rmdir content/ars && rmdir static/ars")
 
 
 if __name__ == "__main__":
