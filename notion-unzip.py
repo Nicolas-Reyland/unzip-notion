@@ -13,9 +13,16 @@ MARKDOWN_HASH_SUFFIX_PATTERN = re.compile(b'%20[0-9a-z]{32}')
 MARKDOWN_MD_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)]*.md)\\)')
 MARKDOWN_IMG_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)]*.(?:png|jpg|jpeg|gif|bmp|tiff))\\)')
 MARKDOWN_H1_PATTERN = re.compile(b'^# +(?P<title>.+)\r?\n')
+MARKDOWN_CRIT_PATTERN = re.compile(b'~~[ \t]*crit[ \t]+(?P<crit>.+)~~[ \t]*\n?')
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger()
+
+
+def replace_match(match: re.Match[bytes], repl: bytes, content: bytes, match_offset: int) -> tuple[bytes, int]:
+    content = content[:match.start() + match_offset] + repl + content[match.end() + match_offset:]
+    match_offset += len(repl) - match.end() + match.start()
+    return content, match_offset
 
 
 def repair_name(name: bytes) -> bytes:
@@ -99,21 +106,30 @@ def repair_content(content: bytes, src: bytes, _: bytes, resource_dir_names: lis
     md_match_offset = 0
     for match in MARKDOWN_MD_LINK_PATTERN.finditer(content):
         repaired_link = repair_link(match, old_link_prefix, resource_dir_names)
-        content = content[:match.start() + md_match_offset] + repaired_link + content[match.end() + md_match_offset:]
-        md_match_offset += len(repaired_link) - match.end() + match.start()
+        content, md_match_offset = replace_match(match, repaired_link, content, md_match_offset)
 
     # repair Image links
     img_match_offset = 0
     for match in MARKDOWN_IMG_LINK_PATTERN.finditer(content):
         repaired_link = repair_link(match, old_link_prefix, resource_dir_names, md_link=False)
-        content = content[:match.start() + img_match_offset] + repaired_link + content[match.end() + img_match_offset:]
-        img_match_offset += len(repaired_link) - match.end() + match.start()
+        content, img_match_offset = replace_match(match, repaired_link, content, img_match_offset)
 
+    # tags & crit
+    tags: set[bytes] = set()
+    crit_match_offset = 0
+    for match in MARKDOWN_CRIT_PATTERN.finditer(content):
+        crit = match.group('crit').strip().replace(b'"', b'')
+        tags.add(crit)
+        md_crit = b'{{< crit "' + crit + b'" >}}'
+        content, crit_match_offset = replace_match(match, md_crit, content, crit_match_offset)
+
+    logger.info(f'Found {len(tags)} tags')
     slug = urllib.parse.unquote_to_bytes(repair_url_part(old_link_prefix).removesuffix(b'.md'))
 
     return b'''---
 title: ''' + title + b'''
 slug: ''' + slug + b'''
+tags: [ ''' + b', '.join(b'"' + tag + b'"' for tag in tags) + b''' ]
 ---
 
 ''' + content
