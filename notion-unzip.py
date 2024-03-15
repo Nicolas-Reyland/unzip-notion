@@ -12,6 +12,7 @@ import zipfile
 FILE_HASH_SUFFIX_PATTERN = re.compile(b'(.*)( [0-9a-z]{32})(\\.md)?$')
 MARKDOWN_HASH_SUFFIX_PATTERN = re.compile(b'%20[0-9a-z]{32}')
 MARKDOWN_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)]*)\\)')
+MARKDOWN_H1_PATTERN = re.compile(b'^# +(?P<title>.+)\n')
 
 logger = logging.getLogger('notion-unzip')
 logger.setLevel(logging.DEBUG)
@@ -59,8 +60,18 @@ def fix_link(link_match: re.Match[bytes], link_prefix: bytes) -> bytes:
 
 
 def fix_content(content: bytes, src: bytes, _: bytes) -> bytes:
-    link_prefix = os.path.basename(src).removesuffix(b'.md')
-    link_prefix = bytes(urllib.parse.quote_from_bytes(link_prefix), 'utf-8')
+    file_basename = os.path.basename(src).removesuffix(b'.md')
+
+    # extract title
+    title_match = MARKDOWN_H1_PATTERN.search(content)
+    if title_match:
+        title = title_match.group('title')
+        content = content[title_match.end():]
+    else:
+        title = file_basename
+
+    # fix links
+    link_prefix = bytes(urllib.parse.quote_from_bytes(file_basename), 'utf-8')
     match_offset = 0
     for match in MARKDOWN_LINK_PATTERN.finditer(content):
         fixed_link = fix_link(match, link_prefix)
@@ -69,6 +80,7 @@ def fix_content(content: bytes, src: bytes, _: bytes) -> bytes:
     slug = urllib.parse.unquote_to_bytes(fix_url_part(link_prefix).removesuffix(b'.md'))
 
     return b'''---
+title: ''' + title + b'''
 slug: ''' + slug + b'''
 ---
 
