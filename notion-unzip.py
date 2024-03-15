@@ -11,11 +11,12 @@ import zipfile
 
 FILE_HASH_SUFFIX_PATTERN = re.compile(b'(.*)( [0-9a-z]{32})(\\.md)?$')
 MARKDOWN_HASH_SUFFIX_PATTERN = re.compile(b'%20[0-9a-z]{32}')
-MARKDOWN_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)]*)\\)')
-MARKDOWN_H1_PATTERN = re.compile(b'^# +(?P<title>.+)\n')
+MARKDOWN_MD_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)]*.md)\\)')
+MARKDOWN_IMG_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)]*.(?:png|jpg|jpeg|gif|bmp|tiff))\\)')
+MARKDOWN_H1_PATTERN = re.compile(b'^# +(?P<title>.+)\r?\n')
 
-logger = logging.getLogger('notion-unzip')
-logger.setLevel(logging.DEBUG)
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger()
 
 
 def fix_name(name: bytes) -> bytes:
@@ -73,7 +74,7 @@ def fix_content(content: bytes, src: bytes, _: bytes) -> bytes:
     # fix links
     link_prefix = bytes(urllib.parse.quote_from_bytes(file_basename), 'utf-8')
     match_offset = 0
-    for match in MARKDOWN_LINK_PATTERN.finditer(content):
+    for match in MARKDOWN_MD_LINK_PATTERN.finditer(content):
         fixed_link = fix_link(match, link_prefix)
         content = content[:match.start() + match_offset] + fixed_link + content[match.end() + match_offset:]
         match_offset += len(fixed_link) - match.end() + match.start()
@@ -97,37 +98,42 @@ def copy_file(src: bytes, dst: bytes, force: bool) -> None:
         outfile.write(fixed_content)
 
 
-def beautify(input_dir: bytes, output_dir: bytes, force: bool = False, depth: int = 0) -> None:
-    def verb(*a, **k):
-        print(" " * depth, *a, **k)
+def beautify(input_dir: bytes, markdown_dir: bytes, resources_dir: bytes, force: bool = False, depth: int = 0) -> None:
+    def verb(*a):
+        logger.debug(" " * depth + ' '.join(a))
 
-    if not os.path.isdir(output_dir):
-        os.mkdir(output_dir)
+    if not os.path.isdir(markdown_dir):
+        os.mkdir(markdown_dir)
     elif not force:
-        raise RuntimeError(f'Directory "{output_dir}" already exists. Use --force to overwrite')
+        raise RuntimeError(f'Directory "{markdown_dir}" already exists. Use --force to overwrite')
 
-    verb(f"input: {input_dir}, output: {output_dir}")
+    if not os.path.isdir(resources_dir):
+        os.mkdir(resources_dir)
+    elif not force:
+        raise RuntimeError(f'Directory "{resources_dir}" already exists. Use --force to overwrite')
+
+    verb(f"input: {input_dir}, output: {markdown_dir}")
     for name in sorted(os.listdir(input_dir), key=lambda name_: 0 if os.path.isdir(name_) else 1):
         fixed_name = fix_name(name)
-        output_name = os.path.join(output_dir, fixed_name)
+        markdown_fixed_dir = os.path.join(markdown_dir, fixed_name)
+        resources_fixed_dir = os.path.join(resources_dir, fixed_name)
         if not name.endswith(b'.png'):
             verb(f"looking at {name} (fixed: {fixed_name})")
         path = os.path.join(input_dir, name)
 
         if os.path.isdir(path):
             verb(f"{os.path.basename(path)}: directory")
-            beautify(path, output_name, force, depth + 1)
+            beautify(path, markdown_fixed_dir, resources_fixed_dir, force, depth + 1)
         elif os.path.isfile(path):
             if name.endswith(b'.md'):
-                dst_dir = output_name.removesuffix(b'.md')
+                dst_dir = markdown_fixed_dir.removesuffix(b'.md')
                 if not os.path.isdir(dst_dir):
                     os.mkdir(dst_dir)
                 verb(f"{os.path.basename(path)}: root markdown file")
                 copy_file(path, os.path.join(dst_dir, b'_index.md'), force)
-                # copy_file(path, output_name, force)
             else:
                 # verb(f"{os.path.basename(path)}: resource file")
-                shutil.copy(path, output_name)
+                shutil.copy(path, resources_fixed_dir)
         else:
             print(f"{path}: unknown type")
 
@@ -135,9 +141,9 @@ def beautify(input_dir: bytes, output_dir: bytes, force: bool = False, depth: in
 def main():
     parser = argparse.ArgumentParser(description="unzip notion exports")
     parser.add_argument("-s", "--source", action="store_true", help="Input is the unzipped directory")
-    parser.add_argument("-f", "--force", action="store_true", help="Overwrite existing files in the output directory")
+    parser.add_argument("-f", "--force", action="store_true", help="Overwrite existing files in the hugo directory")
     parser.add_argument("input")
-    parser.add_argument("output")
+    parser.add_argument("hugo_dir")
 
     args = parser.parse_args()
 
@@ -154,11 +160,9 @@ def main():
         with zipfile.ZipFile(args.input, 'r') as zip_ref:
             zip_ref.extractall(tmp_folder.name)
         input_dir = bytes(tmp_folder.name, 'utf-8')
-    if os.path.isdir(args.output) and not args.force:
-        raise OSError("Output directory exists. Use --force to overwrite")
 
-    output_dir = bytes(args.output, 'utf-8')
-    beautify(input_dir, output_dir, args.force)
+    output_dir = bytes(args.hugo_dir, 'utf-8')
+    beautify(input_dir, os.path.join(output_dir, b'content'), os.path.join(output_dir, b'static'), args.force)
     if tmp_folder:
         tmp_folder.cleanup()
 
