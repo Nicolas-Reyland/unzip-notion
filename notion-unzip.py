@@ -10,8 +10,9 @@ import zipfile
 
 FILE_HASH_SUFFIX_PATTERN = re.compile(b'(.*)( [0-9a-z]{32})(\\.md)?$')
 MARKDOWN_HASH_SUFFIX_PATTERN = re.compile(b'%20[0-9a-z]{32}')
-MARKDOWN_MD_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)]*.md)\\)')
-MARKDOWN_RESOURCE_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)]*.\\.(?!md)[^.\n]*)\\)')
+MARKDOWN_MD_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)]*\\.md)\\)')
+# This also matches markdown files. Therefore, markdown files should be processed before
+MARKDOWN_RESOURCE_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)]*\\.(?!md)[^.\n]+)\\)')
 MARKDOWN_H1_PATTERN = re.compile(b'^# +(?P<title>.+)\r?\n')
 MARKDOWN_CRIT_PATTERN = re.compile(b'~~[ \t]*crit[ \t]+(?P<crit>.+)~~[ \t]*\n?')
 
@@ -83,7 +84,7 @@ def repair_link(
     if new_url_parts:
         if new_url_parts[0] == old_link_prefix:
             new_url_parts.pop(0)
-        elif new_url_parts[0] in parent_link_prefixes:
+        elif new_url_parts[0] == b'..' or new_url_parts[0] in parent_link_prefixes:
             new_url_parts.insert(0, b'..')
 
     new_url = b'/'.join(new_url_parts)
@@ -103,17 +104,17 @@ def repair_content(content: bytes, src: bytes, _: bytes, resource_dir_names: lis
         title = file_basename
 
     old_link_prefix = repair_url_part(bytes(urllib.parse.quote_from_bytes(file_basename), 'utf-8'))
-    # repair Markdown links
-    md_match_offset = 0
-    for match in MARKDOWN_MD_LINK_PATTERN.finditer(content):
-        repaired_link = repair_link(match, old_link_prefix, resource_dir_names)
-        content, md_match_offset = replace_match(match, repaired_link, content, md_match_offset)
-
     # repair Resource links
     resource_match_offset = 0
     for match in MARKDOWN_RESOURCE_LINK_PATTERN.finditer(content):
         repaired_link = repair_link(match, old_link_prefix, resource_dir_names, md_link=False)
         content, resource_match_offset = replace_match(match, repaired_link, content, resource_match_offset)
+
+    # repair Markdown links
+    md_match_offset = 0
+    for match in MARKDOWN_MD_LINK_PATTERN.finditer(content):
+        repaired_link = repair_link(match, old_link_prefix, resource_dir_names)
+        content, md_match_offset = replace_match(match, repaired_link, content, md_match_offset)
 
     # tags & crit
     tags: set[bytes] = set()
