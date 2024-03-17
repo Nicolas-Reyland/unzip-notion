@@ -204,29 +204,58 @@ def main():
     parser = argparse.ArgumentParser(description="unzip notion exports")
     parser.add_argument("-s", "--source", action="store_true", help="Input is the unzipped directory")
     parser.add_argument("-f", "--force", action="store_true", help="Overwrite existing files in the hugo directory")
+    parser.add_argument("-o", "--overwrite", type=str, help="Path to an existing hugo directory containing the "
+                                                            "content and static folders to overwrite generated files.")
     parser.add_argument("input")
     parser.add_argument("hugo_dir")
 
     args = parser.parse_args()
 
+    # Argument processing
+    content_overwrite: str | None = None
+    static_overwrite: str | None = None
+    if args.overwrite:
+        if not os.path.isdir(args.overwrite):
+            raise NotADirectoryError(f'"{args.overwrite}" (--overwrite)')
+        content_overwrite = os.path.join(args.overwrite, 'content')
+        if not os.path.isdir(content_overwrite):
+            logger.warning(f'Did not find the "content" directory in "{args.overwrite}". Creating it.')
+        static_overwrite = os.path.join(args.overwrite, 'content')
+        if not os.path.isdir(static_overwrite):
+            logger.warning(f'Did not find the "static" directory in "{args.overwrite}". Creating it.')
+
     input_dir: bytes
     tmp_folder: tempfile.TemporaryDirectory[str] | None = None
     if args.source:
         if not os.path.isdir(args.input):
-            raise OSError("Input is not a directory")
+            raise NotADirectoryError("Input is not a directory")
         input_dir = bytes(args.input, 'utf-8')
     else:
         if not os.path.isfile(args.input):
-            raise OSError("Input is not a file")
+            raise FileNotFoundError("Input is not a file")
         tmp_folder = tempfile.TemporaryDirectory(prefix='notion-unzip-')
         with zipfile.ZipFile(args.input, 'r') as zip_ref:
             zip_ref.extractall(tmp_folder.name)
         input_dir = bytes(tmp_folder.name, 'utf-8')
 
+    # Generate content and static directories
     output_dir = bytes(args.hugo_dir, 'utf-8')
-    beautify(input_dir, os.path.join(output_dir, b'content'), os.path.join(output_dir, b'static'), args.force)
+    content_output_dir = os.path.join(output_dir, b'content')
+    static_output_dir = os.path.join(output_dir, b'static')
+    beautify(input_dir, content_output_dir, static_output_dir, args.force)
+
+    # Clean up file generation
     if tmp_folder:
         tmp_folder.cleanup()
+
+    # Overwrite
+    # This code is written in a way that makes future implementations of the --overwrite option easier
+    if content_overwrite:
+        logger.info('Overwriting content directory with pre-existing files')
+        shutil.copytree(content_overwrite, content_output_dir.decode('utf-8'), dirs_exist_ok=True)
+    if static_overwrite:
+        logger.info('Overwriting static directory with pre-existing files')
+        shutil.copytree(static_overwrite, static_output_dir.decode('utf-8'), dirs_exist_ok=True)
 
 
 if __name__ == "__main__":
