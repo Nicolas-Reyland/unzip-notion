@@ -74,6 +74,8 @@ def repair_link(
     if all([result.scheme, result.netloc]):
         return link_match.group(0)
 
+    if md_link:
+        url = url.removesuffix(b'.md')
     url_parts = url.removeprefix(b'/').split(b'/')
 
     # Rebuild new url
@@ -83,8 +85,6 @@ def repair_link(
             new_url_parts.pop(0)
         elif new_url_parts[0] in parent_link_prefixes:
             new_url_parts.insert(0, b'..')
-        if md_link:
-            new_url_parts[-1] = new_url_parts[-1].removesuffix(b'.md')
 
     new_url = b'/'.join(new_url_parts)
     logger.debug(f'Fixing link: {new_url} (old: {url})')
@@ -165,9 +165,19 @@ def beautify(input_dir: bytes, markdown_dir: bytes, resources_dir: bytes, force:
 
     verb(f"input: {input_dir}, output: {markdown_dir}")
 
-    resource_dir_names: list[bytes] = []
+    names = os.listdir(input_dir)
+    resource_dir_names: list[bytes] = list()
+    for name in names:
+        if os.path.isdir(name):
+            resource_dir_names.append(name)
+        elif name.endswith(b'.md'):
+            resource_dir_names.append(name.removesuffix(b'.md'))
+    resource_dir_names = list(map(
+        lambda resource_dir_name: repair_url_part(repair_name(resource_dir_name)),
+        resource_dir_names
+    ))
     # process directories first, then files
-    for name in sorted(os.listdir(input_dir), key=lambda name_: 0 if os.path.isdir(name_) else 1):
+    for name in sorted(names, key=lambda name_: 0 if os.path.isdir(name_) else 1):
         # first directory should not create a subdirectory
         if depth != 0:
             # markdown directory
@@ -176,7 +186,6 @@ def beautify(input_dir: bytes, markdown_dir: bytes, resources_dir: bytes, force:
             markdown_repaired_dir = os.path.join(markdown_dir, repaired_name)
             # resource directory
             resources_repaired_dir = os.path.join(resources_dir, repaired_name)
-            resource_dir_names.append(repaired_name)
 
             verb(f"looking at {name} (repaired: {repaired_name})")
         else:
