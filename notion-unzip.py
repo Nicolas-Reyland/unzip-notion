@@ -11,7 +11,7 @@ import zipfile
 FILE_HASH_SUFFIX_PATTERN = re.compile(b'(.*)( [0-9a-z]{32})(\\.md)?$')
 MARKDOWN_HASH_SUFFIX_PATTERN = re.compile(b'%20[0-9a-z]{32}')
 MARKDOWN_MD_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)]*.md)\\)')
-MARKDOWN_IMG_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)]*.(?:png|jpg|jpeg|gif|bmp|tiff))\\)')
+MARKDOWN_RESOURCE_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)]*.\\.(?!md)[^.\n]*)\\)')
 MARKDOWN_H1_PATTERN = re.compile(b'^# +(?P<title>.+)\r?\n')
 MARKDOWN_CRIT_PATTERN = re.compile(b'~~[ \t]*crit[ \t]+(?P<crit>.+)~~[ \t]*\n?')
 
@@ -52,13 +52,13 @@ def repair_link(
         md_link: bool = True
 ) -> bytes:
     """
-    Repair a Markdown or Image link.
+    Repair a Markdown or Resource link.
 
-    :param link_match: regex match object for a Markdown or Image link
+    :param link_match: regex match object for a Markdown or Resource link
     :param old_link_prefix: prefix that must be removed
     :param parent_link_prefixes: prefixes that are not valid
     :param url_prefix: a prefix to add the resulting url
-    :param md_link: the match matches a Markdown link (not an Image link)
+    :param md_link: the match matches a Markdown link (not a Resource link)
     :return: the link with a repaired url part
     """
     if not parent_link_prefixes:
@@ -108,11 +108,11 @@ def repair_content(content: bytes, src: bytes, _: bytes, resource_dir_names: lis
         repaired_link = repair_link(match, old_link_prefix, resource_dir_names)
         content, md_match_offset = replace_match(match, repaired_link, content, md_match_offset)
 
-    # repair Image links
-    img_match_offset = 0
-    for match in MARKDOWN_IMG_LINK_PATTERN.finditer(content):
+    # repair Resource links
+    resource_match_offset = 0
+    for match in MARKDOWN_RESOURCE_LINK_PATTERN.finditer(content):
         repaired_link = repair_link(match, old_link_prefix, resource_dir_names, md_link=False)
-        content, img_match_offset = replace_match(match, repaired_link, content, img_match_offset)
+        content, resource_match_offset = replace_match(match, repaired_link, content, resource_match_offset)
 
     # tags & crit
     tags: set[bytes] = set()
