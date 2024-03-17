@@ -30,15 +30,16 @@ def repair_name(name: bytes) -> bytes:
         FILE_HASH_SUFFIX_PATTERN,
         b'\\1\\3',
         name.replace(b'e\xa6\xfc', b'\xc3\xa9')
-        .replace(b'e\xcc\x81', b'\xc3\xa9')
-        .replace(b'\xc3\xa9', b'e')
+            .replace(b'e\xcc\x81', b'\xc3\xa9')
+            .replace(b'\xc3\xa9', b'e')
+            .replace(b'\xe2\x80\x99', b"_")
     )
 
 
 def repair_url_part(url_part: bytes) -> bytes:
     url_part = re.sub(MARKDOWN_HASH_SUFFIX_PATTERN, b'', url_part)
     url_part = url_part.lower()
-    for old, new in [(b'%20', b' '), (b'e%cc%81', b'e')]:
+    for old, new in [(b'%20', b' '), (b'e%cc%81', b'e'), (b"%e2%80%99", b'_')]:
         url_part = url_part.replace(old, new)
     url_words = url_part.split(b' ')
     return b'-'.join(filter(lambda word: word != b'-', url_words))
