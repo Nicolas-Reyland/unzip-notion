@@ -14,7 +14,7 @@ MARKDOWN_MD_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)]*\\.md
 # This also matches markdown files. Therefore, markdown files should be processed before
 MARKDOWN_RESOURCE_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)]*\\.(?!md)[^.\n]+)\\)')
 MARKDOWN_H1_PATTERN = re.compile(b'^# +(?P<title>.+)\r?\n')
-MARKDOWN_CRIT_PATTERN = re.compile(b'~~[ \t]*crit[ \t]+(?P<crit>.+)~~[ \t]*\n?')
+MARKDOWN_CRIT_PATTERN = re.compile(b'~~[ \t]*crit[ \t]+(?P<crit>[^~]+)~~[ \t]*\n?')
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger()
@@ -120,7 +120,7 @@ def repair_content(content: bytes, src: bytes, _: bytes, resource_dir_names: lis
     tags: set[bytes] = set()
     crit_match_offset = 0
     for match in MARKDOWN_CRIT_PATTERN.finditer(content):
-        crit = match.group('crit').strip().replace(b'"', b'')
+        crit = match.group('crit').strip().replace(b'"', b'').replace(b'\n', b'')
         tags.add(crit)
         md_crit = b'{{< crit "' + crit + b'" >}}'
         content, crit_match_offset = replace_match(match, md_crit, content, crit_match_offset)
