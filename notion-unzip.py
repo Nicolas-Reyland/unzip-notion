@@ -4,6 +4,7 @@ import logging
 import re
 import os
 import shutil
+import sys
 import tempfile
 import urllib.parse
 import zipfile
@@ -12,7 +13,7 @@ FILE_HASH_SUFFIX_PATTERN = re.compile(b'(.*)( [0-9a-z]{32})(\\.md)?$')
 MARKDOWN_HASH_SUFFIX_PATTERN = re.compile(b'%20[0-9a-z]{32}')
 MARKDOWN_MD_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)]*\\.md)\\)')
 # This also matches markdown files. Therefore, markdown files should be processed before
-MARKDOWN_RESOURCE_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)]*\\.(?!md)[^.\n]+)\\)')
+MARKDOWN_RESOURCE_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)]*\\.(?!md)[^.\n)]+)\\)')
 MARKDOWN_H1_PATTERN = re.compile(b'^# +(?P<title>.+)\r?\n')
 MARKDOWN_CRIT_PATTERN = re.compile(b'~~[ \t]*crit[ \t]+(?P<crit>[^~]+)~~[ \t]*\n?')
 
