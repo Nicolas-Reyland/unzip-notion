@@ -34,6 +34,7 @@ def repair_name(name: bytes) -> bytes:
         name.replace(b'e\xa6\xfc', b'\xc3\xa9')
             .replace(b'e\xcc\x81', b'\xc3\xa9')
             .replace(b'\xc3\xa9', b'e')
+            .replace(b'\xc3\xa7', b'c')
             .replace(b'\xe2\x80\x99', b"_")
     )
 
@@ -72,8 +73,12 @@ def repair_link(
     name = link_match.group('name')
     url = link_match.group('url')
 
-    result = urllib.parse.urlparse(url)
-    if all([result.scheme, result.netloc]):
+    url_parse_result = None
+    try:
+        url_parse_result = urllib.parse.urlparse(url)
+    except UnicodeDecodeError as err:
+        print(f'Failed to parse "{url}" with urllib.parse.urlparse', file=sys.stderr)
+    if url_parse_result and all([url_parse_result.scheme, url_parse_result.netloc]):
         return link_match.group(0)
 
     if md_link:
@@ -126,7 +131,7 @@ def repair_content(content: bytes, src: bytes, _: bytes, resource_dir_names: lis
         md_crit = b'{{< crit "' + crit + b'" >}}'
         content, crit_match_offset = replace_match(match, md_crit, content, crit_match_offset)
 
-    logger.info(f'Found {len(tags)} tags')
+    logger.debug(f'Found {len(tags)} tags')
     slug = urllib.parse.unquote_to_bytes(repair_url_part(old_link_prefix).removesuffix(b'.md'))
 
     return b'''---
@@ -217,10 +222,16 @@ def main():
     parser.add_argument("-f", "--force", action="store_true", help="Overwrite existing files in the hugo directory")
     parser.add_argument("-o", "--overwrite", type=str, help="Path to an existing hugo directory containing the "
                                                             "content and static folders to overwrite generated files.")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Increase verbosity")
+    parser.add_argument("--keep-tmp-folder", action="store_true", help="Don't remove the temp folder at the end")
     parser.add_argument("input")
     parser.add_argument("hugo_dir")
 
     args = parser.parse_args()
+
+    # Verbose
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
 
     # Argument processing
     content_overwrite: str | None = None
@@ -234,6 +245,8 @@ def main():
         static_overwrite = os.path.join(args.overwrite, 'content')
         if not os.path.isdir(static_overwrite):
             logger.warning(f'Did not find the "static" directory in "{args.overwrite}". Creating it.')
+    if args.source and args.keep_tmp_folder:
+        raise ValueError(f"When using '--source', you don't use a tmp folder for extracting a zip file.")
 
     input_dir: bytes
     tmp_folder: tempfile.TemporaryDirectory[str] | None = None
@@ -257,7 +270,11 @@ def main():
 
     # Clean up file generation
     if tmp_folder:
-        tmp_folder.cleanup()
+        if args.keep_tmp_folder:
+            print(f"Not removing the tmp folder: {tmp_folder}")
+            shutil.copytree(tmp_folder.name, os.path.join("/tmp", "notion-unzip"))
+        else:
+            tmp_folder.cleanup()
 
     # Overwrite
     # This code is written in a way that makes future implementations of the --overwrite option easier
