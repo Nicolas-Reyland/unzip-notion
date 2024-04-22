@@ -6,6 +6,7 @@ import os
 import shutil
 import sys
 import tempfile
+import urllib
 import urllib.parse
 import zipfile
 
@@ -208,7 +209,8 @@ def write_tags_section(markdown_dir: bytes, tags: dict[bytes, bytes]):
 
 """.encode("utf-8")
     for tag_index, (tag_name, tag_value) in enumerate(tags.items(), 1):
-        additional_content += bytes(f"{tag_index}. [", "utf-8") + tag_name + b"](/" + tag_value + b"#" + tag_name.replace(b" ", b"+") + b")\n"
+        additional_content += bytes(f"{tag_index}. [", "utf-8") + tag_name + b"](/" + tag_value + b"#" + \
+            bytes(urllib.parse.quote_plus(tag_name.decode("utf-8")), "utf-8") + b")\n"
     with open(index_file_path, "ab") as index_file:
         index_file.write(additional_content)
 
