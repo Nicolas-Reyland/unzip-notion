@@ -20,6 +20,9 @@ MARKDOWN_CRIT_PATTERN = re.compile(b'~~[ \t]*crit[ \t]+(?P<crit>[^~]+)~~[ \t]*\n
 
 DEFAULT_WEIGHT = b'99'
 
+g_all_dm_tags = dict()
+g_dm_tags = dict()
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger()
 
@@ -101,7 +104,11 @@ def repair_link(
     return b'[' + name + b'](' + new_url + b')'
 
 
-def repair_content(content: bytes, src: bytes, _: bytes, resource_dir_names: list[bytes] | None = None) -> bytes:
+def repair_content(
+        content: bytes,
+        src: bytes,
+        _: bytes,
+        resource_dir_names: list[bytes] | None = None) -> tuple[bytes, set[bytes]]:
     file_basename = os.path.basename(src).removesuffix(b'.md')
 
     # extract title
@@ -144,10 +151,10 @@ weight: ''' + DEFAULT_WEIGHT + b'''
 tags: [ ''' + b', '.join(b'"' + tag + b'"' for tag in tags) + b''' ]
 ---
 
-''' + content
+''' + content, tags
 
 
-def copy_file(src: bytes, dst: bytes, resource_dir_names: list[bytes] | None = None, force: bool = False) -> None:
+def copy_file(src: bytes, dst: bytes, resource_dir_names: list[bytes] | None = None, force: bool = False) -> set[bytes]:
     if os.path.exists(dst) and not force:
         raise RuntimeError(f'File "{dst}" already exists. Use --force to overwrite')
 
@@ -156,8 +163,10 @@ def copy_file(src: bytes, dst: bytes, resource_dir_names: list[bytes] | None = N
 
     with open(src, 'rb') as infile, open(dst, 'wb') as outfile:
         content = infile.read()
-        repaired_content = repair_content(content, src, dst, resource_dir_names)
+        repaired_content, tags = repair_content(content, src, dst, resource_dir_names)
         outfile.write(repaired_content)
+
+    return tags
 
 
 def link_order_from_index_file(index_file_path: bytes) -> list[bytes]:
@@ -191,9 +200,35 @@ def set_page_weight(target_file_path, link_weight):
     logger.info(f"Updated weight to {link_weight} for {target_file_path}")
 
 
-def beautify(input_dir: bytes, markdown_dir: bytes, resources_dir: bytes, force: bool = False, depth: int = 0) -> None:
+def write_tags_section(markdown_dir: bytes, tags: dict[bytes, bytes]):
+    index_file_path = os.path.join(markdown_dir, b'_index.md')
+    additional_content = """
+
+## Critères
+
+""".encode("utf-8")
+    for tag_index, (tag_name, tag_value) in enumerate(tags.items(), 1):
+        additional_content += bytes(f"{tag_index}. [", "utf-8") + tag_name + b"](/" + tag_value + b"#" + tag_name.replace(b" ", b"+") + b")\n"
+    with open(index_file_path, "ab") as index_file:
+        index_file.write(additional_content)
+
+
+def beautify(
+        base_dir: bytes,
+        input_dir: bytes,
+        markdown_dir: bytes,
+        resources_dir: bytes,
+        force: bool = False,
+        depth: int = 0) -> None:
+    global g_all_dm_tags, g_dm_tags
+
     def verb(*a):
         logger.debug(" " * depth + ' '.join(a))
+
+    markdown_dir_basename = os.path.basename(markdown_dir)
+    is_dm_dir = depth == 2 and markdown_dir_basename.startswith(b'dm-')
+    if is_dm_dir:
+        g_dm_tags = dict()
 
     if not os.path.isdir(markdown_dir):
         os.mkdir(markdown_dir)
@@ -237,13 +272,17 @@ def beautify(input_dir: bytes, markdown_dir: bytes, resources_dir: bytes, force:
 
         if os.path.isdir(path):
             verb(f"{os.path.basename(path)}: directory")
-            beautify(path, markdown_repaired_dir, resources_repaired_dir, force, depth + 1)
+            beautify(base_dir, path, markdown_repaired_dir, resources_repaired_dir, force, depth + 1)
         elif os.path.isfile(path):
             if name.endswith(b'.md'):
                 if not os.path.isdir(markdown_repaired_dir):
                     os.mkdir(markdown_repaired_dir)
                 verb(f"{os.path.basename(path)}: root markdown file")
-                copy_file(path, os.path.join(markdown_repaired_dir, b'_index.md'), resource_dir_names, force)
+                if dst_file_tags := copy_file(path, os.path.join(markdown_repaired_dir, b'_index.md'), resource_dir_names, force):
+                    # register all tags with the right markdown directory
+                    tag_value = os.path.relpath(markdown_repaired_dir, base_dir)
+                    for tag in dst_file_tags:
+                        g_dm_tags[tag] = tag_value
             else:
                 # verb(f"{os.path.basename(path)}: resource file")
                 shutil.copy(path, resources_repaired_dir)
@@ -255,10 +294,19 @@ def beautify(input_dir: bytes, markdown_dir: bytes, resources_dir: bytes, force:
         # figure out the order of links in the current file
         link_order = link_order_from_index_file(os.path.join(markdown_dir, b'_index.md'))
         # iterate once again over the all subdirectories and write weight values
-        for link_index, link_target in enumerate(link_order):
-            link_weight = link_index + 1
+        for link_weight, link_target in enumerate(link_order, 1):
             logger.info(f"Setting weight of {link_target} to {link_weight}")
             set_page_weight(os.path.join(markdown_dir, link_target, b'_index.md'), link_weight)
+
+    # collect tags
+    if depth == 2 and markdown_dir_basename.startswith(b'dm-'):
+        g_all_dm_tags[markdown_dir_basename] = g_dm_tags.copy()
+
+    # write tags
+    if depth == 0:
+        for dm_dir_name, tag_dict in g_all_dm_tags.items():
+            logger.debug(f"Found {len(g_dm_tags)} tags for {dm_dir_name}")
+            write_tags_section(os.path.join(markdown_dir, dm_dir_name), tag_dict)
 
 
 def main():
@@ -317,7 +365,7 @@ def main():
     output_dir = bytes(args.hugo_dir, 'utf-8')
     content_output_dir = os.path.join(output_dir, b'content')
     static_output_dir = os.path.join(output_dir, b'static')
-    beautify(input_dir, content_output_dir, static_output_dir, args.force)
+    beautify(content_output_dir, input_dir, content_output_dir, static_output_dir, args.force)
 
     # Clean up file generation
     if tmp_folder:
