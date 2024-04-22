@@ -250,6 +250,7 @@ def beautify(input_dir: bytes, markdown_dir: bytes, resources_dir: bytes, force:
         else:
             print(f"{path}: unknown type")
 
+    # set weights of pages depending on the order of appearance of the links in the _index.md file
     if depth != 0:
         # figure out the order of links in the current file
         link_order = link_order_from_index_file(os.path.join(markdown_dir, b'_index.md'))
@@ -265,7 +266,8 @@ def main():
     parser.add_argument("-s", "--source", action="store_true", help="Input is the unzipped directory")
     parser.add_argument("-f", "--force", action="store_true", help="Overwrite existing files in the hugo directory")
     parser.add_argument("-o", "--overwrite", type=str, help="Path to an existing hugo directory containing the "
-                                                            "content and static folders to overwrite generated files.")
+                                                            "content and static folders (and possibly a hugo.toml file) to "
+                                                            "overwrite generated files.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Increase verbosity")
     parser.add_argument("--keep-tmp-folder", action="store_true", help="Don't remove the temp folder at the end")
     parser.add_argument("input")
@@ -280,6 +282,7 @@ def main():
     # Argument processing
     content_overwrite: str | None = None
     static_overwrite: str | None = None
+    toml_overwrite: str | None = None
     if args.overwrite:
         if not os.path.isdir(args.overwrite):
             raise NotADirectoryError(f'"{args.overwrite}" (--overwrite)')
@@ -289,6 +292,10 @@ def main():
         static_overwrite = os.path.join(args.overwrite, 'content')
         if not os.path.isdir(static_overwrite):
             logger.warning(f'Did not find the "static" directory in "{args.overwrite}". Creating it.')
+        toml_overwrite = os.path.join(args.overwrite, 'hugo.toml')
+        if not os.path.isfile(toml_overwrite):
+            logger.info(f'Did not find the "hugo.toml" file in "{args.overwrite}".')
+            toml_overwrite = None
     if args.source and args.keep_tmp_folder:
         raise ValueError(f"When using '--source', you don't use a tmp folder for extracting a zip file.")
 
@@ -328,6 +335,9 @@ def main():
     if static_overwrite:
         logger.info('Overwriting static directory with pre-existing files')
         shutil.copytree(static_overwrite, static_output_dir.decode('utf-8'), dirs_exist_ok=True)
+    if toml_overwrite:
+        logger.info('Overwriting toml file')
+        shutil.copy(toml_overwrite, args.hugo_dir)
 
 
 if __name__ == "__main__":
