@@ -12,16 +12,19 @@ import zipfile
 FILE_HASH_SUFFIX_PATTERN = re.compile(b'(.*)( [0-9a-z]{32})(\\.md)?$')
 MARKDOWN_HASH_SUFFIX_PATTERN = re.compile(b'%20[0-9a-z]{32}')
 MARKDOWN_MD_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)]*\\.md)\\)')
+MARKDOWN_DIR_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)/]+)\\)')
 # This also matches markdown files. Therefore, markdown files should be processed before
 MARKDOWN_RESOURCE_LINK_PATTERN = re.compile(b'\\[(?P<name>[^]]*)]\\((?P<url>[^)]*\\.(?!md)[^.\n)]+)\\)')
 MARKDOWN_H1_PATTERN = re.compile(b'^# +(?P<title>.+)\r?\n')
 MARKDOWN_CRIT_PATTERN = re.compile(b'~~[ \t]*crit[ \t]+(?P<crit>[^~]+)~~[ \t]*\n?')
 
+DEFAULT_WEIGHT = b'99'
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger()
 
 
-def replace_match(match: re.Match[bytes], repl: bytes, content: bytes, match_offset: int) -> tuple[bytes, int]:
+def replace_match(match: re.Match[bytes], repl: bytes, content: bytes, match_offset: int = 0) -> tuple[bytes, int]:
     content = content[:match.start() + match_offset] + repl + content[match.end() + match_offset:]
     match_offset += len(repl) - match.end() + match.start()
     return content, match_offset
@@ -112,24 +115,24 @@ def repair_content(content: bytes, src: bytes, _: bytes, resource_dir_names: lis
     old_link_prefix = repair_url_part(bytes(urllib.parse.quote_from_bytes(file_basename), 'utf-8'))
     # repair Resource links
     resource_match_offset = 0
-    for match in MARKDOWN_RESOURCE_LINK_PATTERN.finditer(content):
-        repaired_link = repair_link(match, old_link_prefix, resource_dir_names, md_link=False)
-        content, resource_match_offset = replace_match(match, repaired_link, content, resource_match_offset)
+    for re_match in MARKDOWN_RESOURCE_LINK_PATTERN.finditer(content):
+        repaired_link = repair_link(re_match, old_link_prefix, resource_dir_names, md_link=False)
+        content, resource_match_offset = replace_match(re_match, repaired_link, content, resource_match_offset)
 
     # repair Markdown links
     md_match_offset = 0
-    for match in MARKDOWN_MD_LINK_PATTERN.finditer(content):
-        repaired_link = repair_link(match, old_link_prefix, resource_dir_names)
-        content, md_match_offset = replace_match(match, repaired_link, content, md_match_offset)
+    for re_match in MARKDOWN_MD_LINK_PATTERN.finditer(content):
+        repaired_link = repair_link(re_match, old_link_prefix, resource_dir_names)
+        content, md_match_offset = replace_match(re_match, repaired_link, content, md_match_offset)
 
     # tags & crit
     tags: set[bytes] = set()
     crit_match_offset = 0
-    for match in MARKDOWN_CRIT_PATTERN.finditer(content):
-        crit = match.group('crit').strip().replace(b'"', b'').replace(b'\n', b'')
+    for re_match in MARKDOWN_CRIT_PATTERN.finditer(content):
+        crit = re_match.group('crit').strip().replace(b'"', b'').replace(b'\n', b'')
         tags.add(crit)
         md_crit = b'{{< crit "' + crit + b'" >}}'
-        content, crit_match_offset = replace_match(match, md_crit, content, crit_match_offset)
+        content, crit_match_offset = replace_match(re_match, md_crit, content, crit_match_offset)
 
     logger.debug(f'Found {len(tags)} tags')
     slug = urllib.parse.unquote_to_bytes(repair_url_part(old_link_prefix).removesuffix(b'.md'))
@@ -137,6 +140,7 @@ def repair_content(content: bytes, src: bytes, _: bytes, resource_dir_names: lis
     return b'''---
 title: ''' + title + b'''
 slug: ''' + slug + b'''
+weight: ''' + DEFAULT_WEIGHT + b'''
 tags: [ ''' + b', '.join(b'"' + tag + b'"' for tag in tags) + b''' ]
 ---
 
@@ -154,6 +158,37 @@ def copy_file(src: bytes, dst: bytes, resource_dir_names: list[bytes] | None = N
         content = infile.read()
         repaired_content = repair_content(content, src, dst, resource_dir_names)
         outfile.write(repaired_content)
+
+
+def link_order_from_index_file(index_file_path: bytes) -> list[bytes]:
+    with open(index_file_path, 'rb') as index_file:
+        content = index_file.read()
+    link_order = list()
+    for re_match in MARKDOWN_DIR_LINK_PATTERN.finditer(content):
+        link_target = re_match.group('url')
+        if link_target in link_order:
+            continue
+        logger.debug(f"Found direct link in {index_file_path}: {link_target}")
+        link_order.append(link_target)
+    return link_order
+
+
+def set_page_weight(target_file_path, link_weight):
+    if not os.path.isfile(target_file_path):
+        if not target_file_path.endswith(b'.png'):
+            logger.error(f'File (target of link) "{target_file_path}" does not exist. "'
+                         f'"Its weight should have been: {link_weight}')
+        return
+    with open(target_file_path, 'rb') as target_file:
+        content = target_file.read()
+    weight_re_match = re.search(b'^weight: ' + DEFAULT_WEIGHT + b'$', content, re.MULTILINE)
+    if weight_re_match is None:
+        logger.warning(f'No weight tag found for "{target_file_path}"')
+        return
+    content, __ = replace_match(weight_re_match, b'weight: ' + bytes(str(link_weight), 'utf-8'), content)
+    with open(target_file_path, 'wb') as target_file:
+        target_file.write(content)
+    logger.info(f"Updated weight to {link_weight} for {target_file_path}")
 
 
 def beautify(input_dir: bytes, markdown_dir: bytes, resources_dir: bytes, force: bool = False, depth: int = 0) -> None:
@@ -214,6 +249,15 @@ def beautify(input_dir: bytes, markdown_dir: bytes, resources_dir: bytes, force:
                 shutil.copy(path, resources_repaired_dir)
         else:
             print(f"{path}: unknown type")
+
+    if depth != 0:
+        # figure out the order of links in the current file
+        link_order = link_order_from_index_file(os.path.join(markdown_dir, b'_index.md'))
+        # iterate once again over the all subdirectories and write weight values
+        for link_index, link_target in enumerate(link_order):
+            link_weight = link_index + 1
+            logger.info(f"Setting weight of {link_target} to {link_weight}")
+            set_page_weight(os.path.join(markdown_dir, link_target, b'_index.md'), link_weight)
 
 
 def main():
