@@ -2,4 +2,5 @@
 /content/
 /static/
 /.venv
+__pycache__
 hugo.toml
