@@ -1,4 +1,3 @@
-#!/usr//bin/env python3
 import argparse
 import logging
 import re
@@ -23,6 +22,8 @@ DEFAULT_WEIGHT = b'99'
 
 g_all_dm_tags = dict()
 g_dm_tags = dict()
+
+g_exit_status: int = 0
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger()
@@ -80,13 +81,13 @@ def repair_link(
     name = link_match.group('name')
     url = link_match.group('url')
 
-    url_parse_result = None
     try:
         url_parse_result = urllib.parse.urlparse(url)
     except UnicodeDecodeError as err:
         print(f'Failed to parse "{url}" with urllib.parse.urlparse', file=sys.stderr)
-    if url_parse_result and all([url_parse_result.scheme, url_parse_result.netloc]):
-        return link_match.group(0)
+    else:
+        if all([url_parse_result.scheme, url_parse_result.netloc]):
+            return link_match.group(0)
 
     if md_link:
         url = url.removesuffix(b'.md')
@@ -184,21 +185,24 @@ def link_order_from_index_file(index_file_path: bytes) -> list[bytes]:
 
 
 def set_page_weight(target_file_path, link_weight):
+    global g_exit_status
+
     if not os.path.isfile(target_file_path):
         if not target_file_path.endswith(b'.png'):
-            logger.error(f'File (target of link) "{target_file_path}" does not exist. "'
-                         f'"Its weight should have been: {link_weight}')
+            logger.error(f"File (target of link) {target_file_path} does not exist. "
+                         f"Its weight should have been: {link_weight}")
+            g_exit_status = 1
         return
     with open(target_file_path, 'rb') as target_file:
         content = target_file.read()
     weight_re_match = re.search(b'^weight: ' + DEFAULT_WEIGHT + b'$', content, re.MULTILINE)
     if weight_re_match is None:
-        logger.warning(f'No weight tag found for "{target_file_path}"')
+        logger.warning(f"No weight tag found for {target_file_path}")
         return
     content, __ = replace_match(weight_re_match, b'weight: ' + bytes(str(link_weight), 'utf-8'), content)
     with open(target_file_path, 'wb') as target_file:
         target_file.write(content)
-    logger.info(f"Updated weight to {link_weight} for {target_file_path}")
+    logger.debug(f"Updated weight to {link_weight} for {target_file_path}")
 
 
 def write_tags_section(markdown_dir: bytes, tags: dict[bytes, bytes]):
@@ -222,7 +226,7 @@ def beautify(
         resources_dir: bytes,
         force: bool = False,
         depth: int = 0) -> None:
-    global g_all_dm_tags, g_dm_tags
+    global g_all_dm_tags, g_dm_tags, g_exit_status
 
     def verb(*a):
         logger.debug(" " * depth + ' '.join(a))
@@ -291,14 +295,21 @@ def beautify(
         else:
             print(f"{path}: unknown type")
 
-    # set weights of pages depending on the order of appearance of the links in the _index.md file
+    # set weights of pages depending on the order of appearance of the links
+    # in the current directory's _index.md file
     if depth != 0:
-        # figure out the order of links in the current file
-        link_order = link_order_from_index_file(os.path.join(markdown_dir, b'_index.md'))
-        # iterate once again over the all subdirectories and write weight values
-        for link_weight, link_target in enumerate(link_order, 1):
-            logger.info(f"Setting weight of {link_target} to {link_weight}")
-            set_page_weight(os.path.join(markdown_dir, link_target, b'_index.md'), link_weight)
+        index_file_path = os.path.join(markdown_dir, b'_index.md')
+        try:
+            # figure out the order of links in the current file
+            link_order = link_order_from_index_file(index_file_path)
+        except FileNotFoundError:
+            logger.error(f"Failed to parse {index_file_path} to set the children's weights. File does not exist")
+            g_exit_status = 1
+        else:
+            # iterate once again over the all subdirectories and write weight values
+            for link_weight, link_target in enumerate(link_order, 1):
+                logger.debug(f"Setting weight of {link_target} to {link_weight}")
+                set_page_weight(os.path.join(markdown_dir, link_target, b'_index.md'), link_weight)
 
     # collect tags
     if depth == 2 and markdown_dir_basename.startswith(b'dm-'):
@@ -312,12 +323,18 @@ def beautify(
 
 
 def main():
+    global g_exit_status
+
     parser = argparse.ArgumentParser(description="unzip notion exports")
+    parser.add_argument("-c", "--clean", action="store_true", help="Clean output 'content' and 'static' "
+                                                                   "directories beforehand")
+    parser.add_argument("--clean-content", action="store_true", help="Clean output 'content' directory beforehand")
+    parser.add_argument("--clean-static", action="store_true", help="Clean output 'static' directory beforehand")
     parser.add_argument("-s", "--source", action="store_true", help="Input is the unzipped directory")
     parser.add_argument("-f", "--force", action="store_true", help="Overwrite existing files in the hugo directory")
     parser.add_argument("-o", "--overwrite", type=str, help="Path to an existing hugo directory containing the "
-                                                            "content and static folders (and possibly a hugo.toml file) to "
-                                                            "overwrite generated files.")
+                                                            "content and static folders (and possibly a hugo.toml "
+                                                            "file) to overwrite generated files.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Increase verbosity")
     parser.add_argument("--keep-tmp-folder", action="store_true", help="Don't remove the temp folder at the end")
     parser.add_argument("input")
@@ -335,7 +352,7 @@ def main():
     toml_overwrite: str | None = None
     if args.overwrite:
         if not os.path.isdir(args.overwrite):
-            raise NotADirectoryError(f'"{args.overwrite}" (--overwrite)')
+            raise NotADirectoryError(f"{args.overwrite} (--overwrite)")
         content_overwrite = os.path.join(args.overwrite, 'content')
         if not os.path.isdir(content_overwrite):
             logger.warning(f'Did not find the "content" directory in "{args.overwrite}". Creating it.')
@@ -358,7 +375,7 @@ def main():
     else:
         if not os.path.isfile(args.input):
             raise FileNotFoundError("Input is not a file")
-        tmp_folder = tempfile.TemporaryDirectory(prefix='notion-unzip-')
+        tmp_folder = tempfile.TemporaryDirectory(prefix='unzip-notion-')
         with zipfile.ZipFile(args.input, 'r') as zip_ref:
             zip_ref.extractall(tmp_folder.name)
         input_dir = bytes(tmp_folder.name, 'utf-8')
@@ -367,13 +384,23 @@ def main():
     output_dir = bytes(args.hugo_dir, 'utf-8')
     content_output_dir = os.path.join(output_dir, b'content')
     static_output_dir = os.path.join(output_dir, b'static')
+
+    # clean output content dir
+    if args.clean or args.clean_content:
+        logger.info(f"Clearing output 'content' dir: {content_output_dir}")
+        shutil.rmtree(content_output_dir)
+    if args.clean or args.clean_static:
+        logger.info(f"Clearing output 'static' dir: {static_output_dir}")
+        shutil.rmtree(static_output_dir)
+
+    # main function
     beautify(content_output_dir, input_dir, content_output_dir, static_output_dir, args.force)
 
     # Clean up file generation
     if tmp_folder:
         if args.keep_tmp_folder:
             print(f"Not removing the tmp folder: {tmp_folder}")
-            shutil.copytree(tmp_folder.name, os.path.join("/tmp", "notion-unzip"))
+            shutil.copytree(tmp_folder.name, os.path.join("/tmp", "unzip-notion"))
         else:
             tmp_folder.cleanup()
 
@@ -388,6 +415,8 @@ def main():
     if toml_overwrite:
         logger.info('Overwriting toml file')
         shutil.copy(toml_overwrite, args.hugo_dir)
+
+    return g_exit_status
 
 
 if __name__ == "__main__":

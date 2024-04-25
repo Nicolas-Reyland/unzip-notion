@@ -1,7 +1,7 @@
-# notion-unzip
+# unzip-notion
 
 ```
 hugo new site my-hugo-site
-./notion-unzip.py /tmp/notion-export.zip ./my-hugo-site
+./unzip-notion.py /tmp/notion-export.zip ./my-hugo-site
 ```
 
