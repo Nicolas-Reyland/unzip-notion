@@ -9,13 +9,17 @@ MARKDOWN_DIR_LINK_PATTERN = re.compile(b"\\[(?P<name>[^]]*)]\\((?P<url>[^)/]+)\\
 DEFAULT_WEIGHT = b"99"
 
 
-def link_order_from_index_file(index_file_path: bytes, markdown_dir: bytes) -> list[bytes]:
+def link_order_from_index_file(
+    index_file_path: bytes, markdown_dir: bytes
+) -> list[bytes]:
     with open(index_file_path, "rb") as index_file:
         content = index_file.read()
     link_order = list()
     for re_match in MARKDOWN_DIR_LINK_PATTERN.finditer(content):
         link_target = re_match.group("url")
-        if link_target in link_order or not os.path.isdir(os.path.join(markdown_dir, link_target)):
+        if link_target in link_order or not os.path.isdir(
+            os.path.join(markdown_dir, link_target)
+        ):
             continue
         logger.debug(f"Found direct link in {index_file_path}: {link_target}")
         link_order.append(link_target)

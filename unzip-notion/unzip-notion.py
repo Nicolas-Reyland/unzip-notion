@@ -21,7 +21,7 @@ MARKDOWN_MD_LINK_PATTERN = re.compile(b"\\[(?P<name>[^]]*)]\\((?P<url>[^)]*\\.md
 MARKDOWN_RESOURCE_LINK_PATTERN = re.compile(
     b"\\[(?P<name>[^]]*)]\\((?P<url>[^)]*\\.(?!md)[^.\n)]+)\\)"
 )
-MARKDOWN_H1_PATTERN = re.compile(b"^# +(?P<title>.+)\r?\n")
+MARKDOWN_H1_PATTERN = re.compile(b"^# +(?P<title>.+)\r?(\n|$)")
 MARKDOWN_CRIT_PATTERN = re.compile(b"~~[ \t]*crit[ \t]+(?P<crit>[^~]+)~~[ \t]*\n?")
 
 g_all_dm_tags = dict()
@@ -100,7 +100,10 @@ def repair_link(
 
 
 def repair_content(
-    content: bytes, src: bytes, _: bytes, resource_dir_names: list[bytes] | None = None
+    content: bytes,
+    src: bytes,
+    dst: bytes,
+    resource_dir_names: list[bytes] | None = None,
 ) -> tuple[bytes, set[bytes]]:
     file_basename = os.path.basename(src).removesuffix(b".md")
 
@@ -110,6 +113,9 @@ def repair_content(
         title = title_match.group("title")
         content = content[title_match.end() :]
     else:
+        logger.warning(
+            f"Could not find title for {dst}. Using file basename {file_basename}"
+        )
         title = file_basename
 
     old_link_prefix = repair_url_part(
@@ -138,9 +144,15 @@ def repair_content(
     crit_match_offset = 0
     for re_match in MARKDOWN_CRIT_PATTERN.finditer(content):
         crit = re_match.group("crit").strip().replace(b'"', b"").replace(b"\n", b"")
+        # remove links INSIDE crits/tags (yes, sometimes that happens :/)
         crit_link_match_offset = 0
         for link_inside_crit_match in MARKDOWN_RESOURCE_LINK_PATTERN.finditer(crit):
-            crit, crit_link_match_offset = replace_match(link_inside_crit_match, link_inside_crit_match.group("name"), crit, crit_link_match_offset)
+            crit, crit_link_match_offset = replace_match(
+                link_inside_crit_match,
+                link_inside_crit_match.group("name"),
+                crit,
+                crit_link_match_offset,
+            )
         tags.add(crit)
         md_crit = b'{{< crit "' + crit + b'" >}}'
         content, crit_match_offset = replace_match(
