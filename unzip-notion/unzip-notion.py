@@ -9,10 +9,14 @@ import urllib
 import urllib.parse
 import zipfile
 
+from logger import logger
+from weights import set_weights, DEFAULT_WEIGHT
+from utils import get_exit_status, replace_match
+
+
 FILE_HASH_SUFFIX_PATTERN = re.compile(b"(.*)( [0-9a-z]{32})(\\.md)?$")
 MARKDOWN_HASH_SUFFIX_PATTERN = re.compile(b"%20[0-9a-z]{32}")
 MARKDOWN_MD_LINK_PATTERN = re.compile(b"\\[(?P<name>[^]]*)]\\((?P<url>[^)]*\\.md)\\)")
-MARKDOWN_DIR_LINK_PATTERN = re.compile(b"\\[(?P<name>[^]]*)]\\((?P<url>[^)/]+)\\)")
 # This also matches markdown files. Therefore, markdown files should be processed before
 MARKDOWN_RESOURCE_LINK_PATTERN = re.compile(
     b"\\[(?P<name>[^]]*)]\\((?P<url>[^)]*\\.(?!md)[^.\n)]+)\\)"
@@ -20,27 +24,8 @@ MARKDOWN_RESOURCE_LINK_PATTERN = re.compile(
 MARKDOWN_H1_PATTERN = re.compile(b"^# +(?P<title>.+)\r?\n")
 MARKDOWN_CRIT_PATTERN = re.compile(b"~~[ \t]*crit[ \t]+(?P<crit>[^~]+)~~[ \t]*\n?")
 
-DEFAULT_WEIGHT = b"99"
-
 g_all_dm_tags = dict()
 g_dm_tags = dict()
-
-g_exit_status: int = 0
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger()
-
-
-def replace_match(
-    match: re.Match[bytes], repl: bytes, content: bytes, match_offset: int = 0
-) -> tuple[bytes, int]:
-    content = (
-        content[: match.start() + match_offset]
-        + repl
-        + content[match.end() + match_offset :]
-    )
-    match_offset += len(repl) - match.end() + match.start()
-    return content, match_offset
 
 
 def repair_name(name: bytes) -> bytes:
@@ -153,6 +138,9 @@ def repair_content(
     crit_match_offset = 0
     for re_match in MARKDOWN_CRIT_PATTERN.finditer(content):
         crit = re_match.group("crit").strip().replace(b'"', b"").replace(b"\n", b"")
+        crit_link_match_offset = 0
+        for link_inside_crit_match in MARKDOWN_RESOURCE_LINK_PATTERN.finditer(crit):
+            crit, crit_link_match_offset = replace_match(link_inside_crit_match, link_inside_crit_match.group("name"), crit, crit_link_match_offset)
         tags.add(crit)
         md_crit = b'{{< crit "' + crit + b'" >}}'
         content, crit_match_offset = replace_match(
@@ -206,46 +194,6 @@ def copy_file(
     return tags
 
 
-def link_order_from_index_file(index_file_path: bytes) -> list[bytes]:
-    with open(index_file_path, "rb") as index_file:
-        content = index_file.read()
-    link_order = list()
-    for re_match in MARKDOWN_DIR_LINK_PATTERN.finditer(content):
-        link_target = re_match.group("url")
-        if link_target in link_order:
-            continue
-        logger.debug(f"Found direct link in {index_file_path}: {link_target}")
-        link_order.append(link_target)
-    return link_order
-
-
-def set_page_weight(target_file_path, link_weight):
-    global g_exit_status
-
-    if not os.path.isfile(target_file_path):
-        if not target_file_path.endswith(b".png"):
-            logger.error(
-                f"File (target of link) {target_file_path} does not exist. "
-                f"Its weight should have been: {link_weight}"
-            )
-            g_exit_status = 1
-        return
-    with open(target_file_path, "rb") as target_file:
-        content = target_file.read()
-    weight_re_match = re.search(
-        b"^weight: " + DEFAULT_WEIGHT + b"$", content, re.MULTILINE
-    )
-    if weight_re_match is None:
-        logger.warning(f"No weight tag found for {target_file_path}")
-        return
-    content, __ = replace_match(
-        weight_re_match, b"weight: " + bytes(str(link_weight), "utf-8"), content
-    )
-    with open(target_file_path, "wb") as target_file:
-        target_file.write(content)
-    logger.debug(f"Updated weight to {link_weight} for {target_file_path}")
-
-
 def write_tags_section(markdown_dir: bytes, tags: dict[bytes, bytes]):
     index_file_path = os.path.join(markdown_dir, b"_index.md")
     additional_content = """
@@ -277,7 +225,7 @@ def beautify(
     force: bool = False,
     depth: int = 0,
 ) -> None:
-    global g_all_dm_tags, g_dm_tags, g_exit_status
+    global g_all_dm_tags, g_dm_tags
 
     def verb(*a):
         logger.debug(" " * depth + " ".join(a))
@@ -364,26 +312,6 @@ def beautify(
         else:
             print(f"{path}: unknown type")
 
-    # set weights of pages depending on the order of appearance of the links
-    # in the current directory's _index.md file
-    if depth != 0:
-        index_file_path = os.path.join(markdown_dir, b"_index.md")
-        try:
-            # figure out the order of links in the current file
-            link_order = link_order_from_index_file(index_file_path)
-        except FileNotFoundError:
-            logger.error(
-                f"Failed to parse {index_file_path} to set the children's weights. File does not exist"
-            )
-            g_exit_status = 1
-        else:
-            # iterate once again over the all subdirectories and write weight values
-            for link_weight, link_target in enumerate(link_order, 1):
-                logger.debug(f"Setting weight of {link_target} to {link_weight}")
-                set_page_weight(
-                    os.path.join(markdown_dir, link_target, b"_index.md"), link_weight
-                )
-
     # collect tags
     if depth == 2 and markdown_dir_basename.startswith(b"dm-"):
         g_all_dm_tags[markdown_dir_basename] = g_dm_tags.copy()
@@ -396,8 +324,6 @@ def beautify(
 
 
 def main():
-    global g_exit_status
-
     parser = argparse.ArgumentParser(description="unzip notion exports")
     parser.add_argument(
         "-c",
@@ -507,6 +433,9 @@ def main():
         content_output_dir, input_dir, content_output_dir, static_output_dir, args.force
     )
 
+    # set weights
+    set_weights(content_output_dir)
+
     # Clean up file generation
     if tmp_folder:
         if args.keep_tmp_folder:
@@ -531,8 +460,8 @@ def main():
         logger.info("Overwriting toml file")
         shutil.copy(toml_overwrite, args.hugo_dir)
 
-    return g_exit_status
+    return get_exit_status()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

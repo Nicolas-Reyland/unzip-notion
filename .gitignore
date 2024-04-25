@@ -3,4 +3,5 @@
 /static/
 /.venv
 __pycache__
+*.zip
 hugo.toml
