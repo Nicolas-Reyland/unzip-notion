@@ -1,4 +1,5 @@
 /.idea/
 /content/
 /static/
+/.venv
 hugo.toml
