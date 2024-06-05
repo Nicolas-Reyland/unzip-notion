@@ -43,7 +43,7 @@ def repair_name(name: bytes) -> bytes:
 def repair_url_part(url_part: bytes) -> bytes:
     url_part = re.sub(MARKDOWN_HASH_SUFFIX_PATTERN, b"", url_part)
     url_part = url_part.lower()
-    for old, new in [(b"%20", b" "), (b"e%cc%81", b"e"), (b"%e2%80%99", b"_"), (b"&", b"et")]:
+    for old, new in [(b"%20", b" "), (b"e%cc%81", b"e"), (b"%e2%80%99", b"_"), (b"&", b"et"), (b",", b"_")]:
         url_part = url_part.replace(old, new)
     url_words = url_part.split(b" ")
     return b"-".join(filter(lambda word: word != b"-", url_words))
