@@ -12,6 +12,13 @@ DEFAULT_WEIGHT = b"99"
 def link_order_from_index_file(
     index_file_path: bytes, markdown_dir: bytes
 ) -> list[bytes]:
+    """
+    Extracts the list of references to other markdown files. This list is ordered by appearance in the file.
+
+    :param index_file_path: Input file.
+    :param markdown_dir: Directory containing the input file (`index_file_path`).
+    :return: List of references to other markdown files.
+    """
     with open(index_file_path, "rb") as index_file:
         content = index_file.read()
     link_order = list()
@@ -26,7 +33,13 @@ def link_order_from_index_file(
     return link_order
 
 
-def set_page_weight(target_file_path, link_weight):
+def set_page_weight(target_file_path: bytes, link_weight: int) -> None:
+    """
+    Overwrites the default weight value by `link_weight`.
+
+    :param target_file_path: Input file.
+    :param link_weight: Weight.
+    """
     if not os.path.isfile(target_file_path):
         if not target_file_path.endswith(b".png"):
             logger.error(
@@ -52,13 +65,18 @@ def set_page_weight(target_file_path, link_weight):
 
 
 def set_weights(markdown_dir: bytes, depth: int = 0) -> None:
+    """
+    Set the right weights for all the files in `markdown_dir`.
 
+    :param markdown_dir: Input directory.
+    :param depth: Current depth (this is a recursive function).
+    """
     for name in os.listdir(markdown_dir):
         child_path = os.path.join(markdown_dir, name)
         if os.path.isdir(child_path):
             set_weights(child_path, depth + 1)
 
-    # set weights of pages depending on the order of appearance of the links
+    # set weights of pages depending on the order of the links
     # in the current directory's _index.md file
     if depth != 0:
         child_path = os.path.join(markdown_dir, b"_index.md")

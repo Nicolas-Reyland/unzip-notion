@@ -29,6 +29,12 @@ g_dm_tags = dict()
 
 
 def repair_name(name: bytes) -> bytes:
+    """
+    Replaces accents. Meant to be used on file names.
+
+    :param name: Name of a file.
+    :return: Repaired name of the file.
+    """
     return re.sub(
         FILE_HASH_SUFFIX_PATTERN,
         b"\\1\\3",
@@ -41,6 +47,13 @@ def repair_name(name: bytes) -> bytes:
 
 
 def repair_url_part(url_part: bytes) -> bytes:
+    """
+    Repair an url, or a part of an url that points to a markdown file.
+    Characters such as spaces and accents (mostly french) are removed.
+
+    :param url_part: Part of an url.
+    :return: Repaired url.
+    """
     url_part = re.sub(MARKDOWN_HASH_SUFFIX_PATTERN, b"", url_part)
     url_part = url_part.lower()
     for old, new in [(b"%20", b" "), (b"e%cc%81", b"e"), (b"%e2%80%99", b"_"), (b"&", b"et"), (b",", b"_")]:
@@ -105,6 +118,22 @@ def repair_content(
     dst: bytes,
     resource_dir_names: list[bytes] | None = None,
 ) -> tuple[bytes, set[bytes]]:
+    """
+    The content of a markdown file is 'repaired'. The following changes are applied:
+     - The taxonomies (https://gohugo.io/content-management/taxonomies/) for Hugo are added at the beginning of the file
+     - Removal of the file title (if present in markdown). It is then added to the taxonomy section
+     - All the links and references to other markdown pages are changed to reflect the path changes
+     - Processing of the tags
+    The content is supposed to be from the file located at `src` and is destined to be written to the file located
+    at `dst`. This is not done by this function, but these arguments are useful for repairing links and references
+    to other markdown files.
+
+    :param content: Content of a markdown source file.
+    :param src: Path of the source file.
+    :param dst: Destination path of the markdown file.
+    :param resource_dir_names: Directory names of other markdown resource files.
+    :return: A tuple. The first element is the output content. The second element is the tags that have been found in the content.
+    """
     file_basename = os.path.basename(src).removesuffix(b".md")
 
     # extract title
@@ -192,6 +221,16 @@ def copy_file(
     resource_dir_names: list[bytes] | None = None,
     force: bool = False,
 ) -> set[bytes]:
+    """
+    Copy a file (src) to a destination path (dst). The content of the source file is modified and 'repaired'
+    using the `repair_content` function.
+
+    :param src: Source path.
+    :param dst: Destination path.
+    :param resource_dir_names: The resource directories found in the same directory as the source file.
+    :param force: The destination file can be overwritten.
+    :return: The list of tags found in the source file.
+    """
     if os.path.exists(dst) and not force:
         raise RuntimeError(f'File "{dst}" already exists. Use --force to overwrite')
 
@@ -206,7 +245,16 @@ def copy_file(
     return tags
 
 
-def write_tags_section(markdown_dir: bytes, tags: dict[bytes, bytes]):
+def write_dm_tags_section(markdown_dir: bytes, tags: dict[bytes, bytes]) -> None:
+    """
+    Write the `tags` section of the DM header page. This function should be executed on each DM page.
+    The content is added at the end of the markdown file. Two newline characters are added before
+    the tags contents.
+
+    :param markdown_dir: The directory in which the '_index.md' file is located.
+    :param tags: A dictionary of tags. The keys are the tag names and the
+    values are the tag links (references to other markdown files).
+    """
     index_file_path = os.path.join(markdown_dir, b"_index.md")
     additional_content = """
 
@@ -229,14 +277,49 @@ def write_tags_section(markdown_dir: bytes, tags: dict[bytes, bytes]):
         index_file.write(additional_content)
 
 
+def extract_resource_dir_names(file_or_dir_names: list[bytes]) -> list[bytes]:
+    """
+    Extract the resource directory names from a list of files and directories.
+    Markdown files will eventually be moved to a directory with the same name (without the .md suffix).
+    This function returns a list of directory names, which can be used in hyperlinks and other references.
+
+    :param file_or_dir_names: Names of files and directories.
+    :return: List of directory names.
+    """
+    resource_dir_names: list[bytes] = list()
+    for name in file_or_dir_names:
+        if os.path.isdir(name):
+            resource_dir_names.append(name)
+        elif name.endswith(b".md"):
+            resource_dir_names.append(name.removesuffix(b".md"))
+    resource_dir_names = list(
+        map(
+            lambda resource_dir_name: repair_url_part(repair_name(resource_dir_name)),
+            resource_dir_names,
+        )
+    )
+    return resource_dir_names
+
+
 def beautify(
-    base_dir: bytes,
+    base_markdown_dir: bytes,
     input_dir: bytes,
     markdown_dir: bytes,
-    resources_dir: bytes,
+    static_dir: bytes,
     force: bool = False,
     depth: int = 0,
 ) -> None:
+    """
+    Beautifies content from the `input_dir` and writes the output to the `markdown_dir` and `static_dir`.
+
+    :param base_markdown_dir: Initial value of the `markdown_dir`.
+    Since this is a recursive function, the value of `markdown_dir` will change.
+    :param input_dir: Path to the directory that is currently being processed.
+    :param markdown_dir: Path to the output directory for the markdown files.
+    :param static_dir: Path to the output directory for the static files.
+    :param force: Overwrite existing files.
+    :param depth: Current depth (this is a recursive function).
+    """
     global g_all_dm_tags, g_dm_tags
 
     def verb(*a):
@@ -254,28 +337,18 @@ def beautify(
             f'Directory "{markdown_dir}" already exists. Use --force to overwrite'
         )
 
-    if not os.path.isdir(resources_dir):
-        os.mkdir(resources_dir)
+    if not os.path.isdir(static_dir):
+        os.mkdir(static_dir)
     elif not force:
         raise RuntimeError(
-            f'Directory "{resources_dir}" already exists. Use --force to overwrite'
+            f'Directory "{static_dir}" already exists. Use --force to overwrite'
         )
 
     verb(f"input: {input_dir}, output: {markdown_dir}")
 
     names = os.listdir(input_dir)
-    resource_dir_names: list[bytes] = list()
-    for name in names:
-        if os.path.isdir(name):
-            resource_dir_names.append(name)
-        elif name.endswith(b".md"):
-            resource_dir_names.append(name.removesuffix(b".md"))
-    resource_dir_names = list(
-        map(
-            lambda resource_dir_name: repair_url_part(repair_name(resource_dir_name)),
-            resource_dir_names,
-        )
-    )
+    resource_dir_names = extract_resource_dir_names(names)
+
     # process directories first, then files
     for name in sorted(names, key=lambda name_: 0 if os.path.isdir(name_) else 1):
         # first directory should not create a subdirectory
@@ -284,22 +357,22 @@ def beautify(
             repaired_name = repair_name(name).removesuffix(b".md")
             repaired_name = repair_url_part(repaired_name)
             markdown_repaired_dir = os.path.join(markdown_dir, repaired_name)
-            # resource directory
-            resources_repaired_dir = os.path.join(resources_dir, repaired_name)
+            # static directory
+            static_repaired_dir = os.path.join(static_dir, repaired_name)
 
             verb(f"looking at {name} (repaired: {repaired_name})")
         else:
             markdown_repaired_dir = markdown_dir
-            resources_repaired_dir = resources_dir
+            static_repaired_dir = static_dir
         path = os.path.join(input_dir, name)
 
         if os.path.isdir(path):
             verb(f"{os.path.basename(path)}: directory")
             beautify(
-                base_dir,
+                base_markdown_dir,
                 path,
                 markdown_repaired_dir,
-                resources_repaired_dir,
+                static_repaired_dir,
                 force,
                 depth + 1,
             )
@@ -315,12 +388,12 @@ def beautify(
                     force,
                 ):
                     # register all tags with the right markdown directory
-                    tag_value = os.path.relpath(markdown_repaired_dir, base_dir)
+                    tag_value = os.path.relpath(markdown_repaired_dir, base_markdown_dir)
                     for tag in dst_file_tags:
                         g_dm_tags[tag] = tag_value
             else:
                 # verb(f"{os.path.basename(path)}: resource file")
-                shutil.copy(path, resources_repaired_dir)
+                shutil.copy(path, static_repaired_dir)
         else:
             print(f"{path}: unknown type")
 
@@ -332,7 +405,7 @@ def beautify(
     if depth == 0:
         for dm_dir_name, tag_dict in g_all_dm_tags.items():
             logger.debug(f"Found {len(g_dm_tags)} tags for {dm_dir_name}")
-            write_tags_section(os.path.join(markdown_dir, dm_dir_name), tag_dict)
+            write_dm_tags_section(os.path.join(markdown_dir, dm_dir_name), tag_dict)
 
 
 def main():
@@ -371,12 +444,17 @@ def main():
         "file) to overwrite generated files.",
     )
     parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Increase verbosity"
-    )
-    parser.add_argument(
         "--keep-tmp-folder",
         action="store_true",
         help="Don't remove the temp folder at the end",
+    )
+    parser.add_argument(
+        "--dm",
+        action="store_true",
+        help="The input zip file (or source directory) is a sub-section, a DM (fr. Devoir Maison)",
+    )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="Increase verbosity"
     )
     parser.add_argument("input")
     parser.add_argument("hugo_dir")
@@ -431,11 +509,18 @@ def main():
     output_dir = bytes(args.hugo_dir, "utf-8")
     content_output_dir = os.path.join(output_dir, b"content")
     static_output_dir = os.path.join(output_dir, b"static")
+    if args.dm:
+        dm_dir_name = repair_url_part()
+        content_output_dir = os.path.join(content_output_dir, b"")
 
     # clean output content dir
     if args.clean or args.clean_content:
-        logger.info(f"Clearing output 'content' dir: {content_output_dir}")
-        shutil.rmtree(content_output_dir)
+        if args.dm:
+            logger.info(f"Clearing output 'content' subdir (DM mode): {content_output_dir}")
+            shutil.rmtree(content_output_dir)
+        else:
+            logger.info(f"Clearing output 'content' dir: {content_output_dir}")
+            shutil.rmtree(content_output_dir)
     if args.clean or args.clean_static:
         logger.info(f"Clearing output 'static' dir: {static_output_dir}")
         shutil.rmtree(static_output_dir)
