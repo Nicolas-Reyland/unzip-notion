@@ -30,7 +30,7 @@ g_dm_tags = dict()
 
 def repair_name(name: bytes) -> bytes:
     """
-    Replaces accents. Meant to be used on file names.
+    Removes the hash suffix and replaces accents in file names.
 
     :param name: Name of a file.
     :return: Repaired name of the file.
@@ -351,7 +351,7 @@ def beautify(
 
     # process directories first, then files
     for name in sorted(names, key=lambda name_: 0 if os.path.isdir(name_) else 1):
-        # first directory should not create a subdirectory
+        # the first directory should not create a subdirectory
         if depth != 0:
             # markdown directory
             repaired_name = repair_name(name).removesuffix(b".md")
@@ -400,13 +400,6 @@ def beautify(
     # collect tags
     if depth == 2 and markdown_dir_basename.startswith(b"dm-"):
         g_all_dm_tags[markdown_dir_basename] = g_dm_tags.copy()
-
-    # write tags
-    if depth == 0:
-        for dm_dir_name, tag_dict in g_all_dm_tags.items():
-            logger.debug(f"Found {len(g_dm_tags)} tags for {dm_dir_name}")
-            write_dm_tags_section(os.path.join(markdown_dir, dm_dir_name), tag_dict)
-
 
 def main():
     parser = argparse.ArgumentParser(description="unzip notion exports")
@@ -509,28 +502,53 @@ def main():
     output_dir = bytes(args.hugo_dir, "utf-8")
     content_output_dir = os.path.join(output_dir, b"content")
     static_output_dir = os.path.join(output_dir, b"static")
+    dm_content_output_dir: bytes | None = None
+    dm_static_output_dir: bytes | None = None
+
     if args.dm:
-        dm_dir_name = repair_url_part()
-        content_output_dir = os.path.join(content_output_dir, b"")
+        logger.debug("DM mode is enabled. Trying to figure out what the output path is...")
+        dm_files = set(
+            filter(lambda f: f.endswith(b".md") and os.path.isfile(os.path.join(input_dir, f)), os.listdir(input_dir)))
+        if len(dm_files) != 1:
+            logger.error(f"No files in '{input_dir}'. Please make sure this is the export of a DM.")
+            raise RuntimeError(f"'{input_dir}' is not a DM export.")
+        dm_folder_name = repair_url_part(repair_name(dm_files.pop())).removesuffix(b".md")
+        dm_content_output_dir = os.path.join(content_output_dir, dm_folder_name)
+        dm_static_output_dir = os.path.join(static_output_dir, dm_folder_name)
+        logger.info(f"DM content output path is '{dm_content_output_dir}' and static path is '{dm_static_output_dir}'")
 
     # clean output content dir
     if args.clean or args.clean_content:
-        if args.dm:
-            logger.info(f"Clearing output 'content' subdir (DM mode): {content_output_dir}")
-            shutil.rmtree(content_output_dir)
-        else:
+        if not args.dm:
             logger.info(f"Clearing output 'content' dir: {content_output_dir}")
-            shutil.rmtree(content_output_dir)
+            shutil.rmtree(content_output_dir, ignore_errors=True)
+        else:
+            logger.info(f"Clearing output 'content' subdir (DM mode): {dm_content_output_dir}")
+            shutil.rmtree(dm_content_output_dir, ignore_errors=True)
     if args.clean or args.clean_static:
-        logger.info(f"Clearing output 'static' dir: {static_output_dir}")
-        shutil.rmtree(static_output_dir)
+        if not args.dm:
+            logger.info(f"Clearing output 'static' dir: {static_output_dir}")
+            shutil.rmtree(static_output_dir, ignore_errors=True)
+        else:
+            logger.info(f"Clearing output 'static' subdir (DM mode): {dm_static_output_dir}")
+            shutil.rmtree(dm_static_output_dir, ignore_errors=True)
 
     # main function
-    beautify(
-        content_output_dir, input_dir, content_output_dir, static_output_dir, args.force
-    )
+    if not args.dm:
+        beautify(
+            content_output_dir, input_dir, content_output_dir, static_output_dir, args.force
+        )
+    else:
+        beautify(
+            content_output_dir, input_dir, content_output_dir, static_output_dir, args.force, depth=1
+        )
 
-    # set weights
+    # write tags
+    for dm_dir_name, tag_dict in g_all_dm_tags.items():
+        logger.debug(f"Found {len(g_dm_tags)} tags for {dm_dir_name}")
+        write_dm_tags_section(os.path.join(content_output_dir, dm_dir_name), tag_dict)
+
+    # write weights
     set_weights(content_output_dir)
 
     # Clean up file generation
