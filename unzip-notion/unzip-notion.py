@@ -22,7 +22,8 @@ MARKDOWN_RESOURCE_LINK_PATTERN = re.compile(
     b"\\[(?P<name>[^]]*)]\\((?P<url>[^)]*\\.(?!md)[^.\n)]+)\\)"
 )
 MARKDOWN_H1_PATTERN = re.compile(b"^# +(?P<title>.+)\r?(\n|$)")
-MARKDOWN_CRIT_PATTERN = re.compile(b"~~[ \t]*crit[ \t]+(?P<crit>[^~]+)~~[ \t]*\n?")
+MARKDOWN_CRIT_PATTERN = re.compile(b"~~[ \t]*(?P<crit_group>crit[ \t]+[^~]+)~~[ \t]*\n?")
+MARKDOWN_CRIT_PATTERN_SELF = re.compile(b"crit[ \t]+(?P<crit>((?!crit)[^~])+)")
 
 g_all_dm_tags = dict()
 g_dm_tags = dict()
@@ -152,40 +153,43 @@ def repair_content(
     )
     # repair Resource links
     resource_match_offset = 0
-    for re_match in MARKDOWN_RESOURCE_LINK_PATTERN.finditer(content):
+    for re_match_group in MARKDOWN_RESOURCE_LINK_PATTERN.finditer(content):
         repaired_link = repair_link(
-            re_match, old_link_prefix, resource_dir_names, md_link=False
+            re_match_group, old_link_prefix, resource_dir_names, md_link=False
         )
         content, resource_match_offset = replace_match(
-            re_match, repaired_link, content, resource_match_offset
+            re_match_group, repaired_link, content, resource_match_offset
         )
 
     # repair Markdown links
     md_match_offset = 0
-    for re_match in MARKDOWN_MD_LINK_PATTERN.finditer(content):
-        repaired_link = repair_link(re_match, old_link_prefix, resource_dir_names)
+    for re_match_group in MARKDOWN_MD_LINK_PATTERN.finditer(content):
+        repaired_link = repair_link(re_match_group, old_link_prefix, resource_dir_names)
         content, md_match_offset = replace_match(
-            re_match, repaired_link, content, md_match_offset
+            re_match_group, repaired_link, content, md_match_offset
         )
 
     # tags & crit
     tags: set[bytes] = set()
     crit_match_offset = 0
-    for re_match in MARKDOWN_CRIT_PATTERN.finditer(content):
-        crit = re_match.group("crit").strip().replace(b'"', b"").replace(b"\n", b"")
+    for re_match_group in MARKDOWN_CRIT_PATTERN.finditer(content):
+        crit_group = re_match_group.group("crit_group").strip().replace(b'"', b"").replace(b"\n", b"")
         # remove links INSIDE crits/tags (yes, sometimes that happens :/)
         crit_link_match_offset = 0
-        for link_inside_crit_match in MARKDOWN_RESOURCE_LINK_PATTERN.finditer(crit):
-            crit, crit_link_match_offset = replace_match(
+        for link_inside_crit_match in MARKDOWN_RESOURCE_LINK_PATTERN.finditer(crit_group):
+            crit_group, crit_link_match_offset = replace_match(
                 link_inside_crit_match,
                 link_inside_crit_match.group("name"),
-                crit,
+                crit_group,
                 crit_link_match_offset,
             )
-        tags.add(crit)
-        md_crit = b'{{< crit "' + crit + b'" >}}'
+        md_crit_list: list[bytes] = list()
+        for re_match in MARKDOWN_CRIT_PATTERN_SELF.finditer(crit_group):
+            crit = re_match.group("crit").strip()
+            tags.add(crit)
+            md_crit_list.append(b'{{< crit "' + crit + b'" >}}')
         content, crit_match_offset = replace_match(
-            re_match, md_crit, content, crit_match_offset
+            re_match_group, b"\n".join(md_crit_list), content, crit_match_offset
         )
 
     logger.debug(f"Found {len(tags)} tags")
